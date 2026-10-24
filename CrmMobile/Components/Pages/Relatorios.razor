@@ -1,0 +1,267 @@
+@page "/relatorios"
+@using System.Globalization
+@using System.Text.Json
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Maui.ApplicationModel.DataTransfer
+@using Microsoft.Maui.Storage
+@using CrmMobile.Data
+@using CrmMobile.Models
+@using CrmMobile.Services
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AuthService Auth
+
+<h3 class="mb-3">Centro de Resultados Internos</h3>
+
+<div class="card card-body mb-3">
+    <label class="small text-muted text-uppercase fw-bold">Categoria</label>
+    <select class="form-select mb-2" @bind="categoria">
+        <option>Todos os Relatórios</option>
+        <option>Financeiro</option>
+        <option>Estoque / PVPS</option>
+        <option>Suprimentos</option>
+    </select>
+    <label class="small text-muted text-uppercase fw-bold">Período</label>
+   <input class="form-control mb-2" type="month" value="@periodo" @onchange="(ChangeEventArgs e) => periodo = e.Value?.ToString() ?? periodo" />    <label class="small text-muted text-uppercase fw-bold">Formato</label>
+    <select class="form-select" @bind="formato">
+        <option value="PDF">PDF (Documento)</option>
+        <option value="XLSX">XLSX (Planilha)</option>
+        <option value="CSV">CSV (Dados)</option>
+    </select>
+</div>
+
+@if (!string.IsNullOrEmpty(aviso))
+{
+    <div class="text-danger mb-2">@aviso</div>
+}
+
+@foreach (var d in Visiveis)
+{
+    <div class="card card-body mb-2">
+        <div class="d-flex align-items-center gap-3">
+            <div style="background:#e6f7f5; border-radius:15px; width:50px; height:50px; display:flex; align-items:center; justify-content:center; font-size:1.5rem;">@d.Icone</div>
+            <div>
+                <strong>@d.Titulo</strong>
+                <div class="small text-muted">@d.Desc</div>
+            </div>
+        </div>
+        <button class="btn btn-primary mt-3" disabled="@(ocupado != "")" @onclick="() => Baixar(d.Id)">
+            @(ocupado == d.Id ? "Gerando..." : "Download " + formato)
+        </button>
+    </div>
+}
+
+<h5 class="mt-4">📜 Histórico de Geração (Log)</h5>
+@if (!log.Any())
+{
+    <p class="text-muted">Nenhum relatório gerado ainda.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm small">
+            <thead>
+                <tr><th>Data/Hora</th><th>Relatório</th><th>Usuário</th><th>Formato</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var l in log)
+                {
+                    <tr>
+                        <td>@l.Data.ToString("dd/MM HH:mm")</td>
+                        <td>@l.Relatorio</td>
+                        <td>@l.Usuario</td>
+                        <td>@l.Formato</td>
+                        <td class="@(l.Status == "Concluído" ? "text-success" : "text-danger")">@l.Status</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    public class LogItem
+    {
+        public DateTime Data { get; set; }
+        public string Relatorio { get; set; } = "";
+        public string Usuario { get; set; } = "";
+        public string Formato { get; set; } = "";
+        public string Status { get; set; } = "";
+    }
+
+    static readonly (string Id, string Icone, string Titulo, string Desc, string Cat)[] Defs =
+    {
+        ("fechamento", "💰", "Fechamento Mensal Consolidado", "Vendas, faturamento e ticket médio do período", "Financeiro"),
+        ("impacto", "🛡️", "Impacto Estratégico PVPS (Desperdício Zero)", "Lotes vencidos ou perto de vencer e valor em risco", "Estoque / PVPS"),
+        ("fornecedores", "🚚", "Auditoria de Fornecedores e Supply Chain", "Nota de desempenho e prazo de entrega", "Suprimentos"),
+        ("equipe", "👥", "Performance da Equipe e Operação", "Funcionários e ações de promoção no período", "Financeiro"),
+        ("inventario", "🔍", "Inventário Geral", "Produtos, estoque e valor em estoque", "Estoque / PVPS")
+    };
+
+    static readonly CultureInfo Br = new("pt-BR");
+    const string ChaveLog = "relatorio_log";
+
+    string categoria = "Todos os Relatórios";
+    string periodo = DateTime.Today.ToString("yyyy-MM");
+    string formato = "PDF";
+    string ocupado = "", aviso = "";
+    List<LogItem> log = new();
+
+    IEnumerable<(string Id, string Icone, string Titulo, string Desc, string Cat)> Visiveis =>
+        Defs.Where(d => categoria == "Todos os Relatórios" || d.Cat == categoria);
+
+    string Usuario => Auth.Usuario?.Nome ?? "sistema";
+
+    protected override void OnInitialized()
+    {
+        try { log = JsonSerializer.Deserialize<List<LogItem>>(Preferences.Default.Get(ChaveLog, "[]")) ?? new(); }
+        catch { log = new(); }
+    }
+
+    void Registrar(string relatorio, string status)
+    {
+        log.Insert(0, new LogItem { Data = DateTime.Now, Relatorio = relatorio, Usuario = Usuario, Formato = formato, Status = status });
+        if (log.Count > 20) log = log.Take(20).ToList();
+        Preferences.Default.Set(ChaveLog, JsonSerializer.Serialize(log));
+    }
+
+    async Task Baixar(string id)
+    {
+        aviso = "";
+        ocupado = id;
+        var def = Defs.First(d => d.Id == id);
+        try
+        {
+            var (cab, linhas, resumo) = await Montar(id);
+
+            var cabecalhoTexto = new List<string>
+            {
+                def.Titulo,
+                $"Período: {periodo}  -  Gerado em {DateTime.Now:dd/MM/yyyy HH:mm} por {Usuario}",
+                ""
+            };
+            cabecalhoTexto.AddRange(resumo);
+
+            byte[] bytes;
+            if (formato == "CSV")
+            {
+                bytes = ArquivoRelatorio.Csv(cab, linhas);
+            }
+            else if (formato == "XLSX")
+            {
+                var tabela = cabecalhoTexto.Select(t => new[] { t }).ToList();
+                tabela.Add(Array.Empty<string>());
+                tabela.Add(cab);
+                tabela.AddRange(linhas);
+                bytes = ArquivoRelatorio.Xlsx(tabela);
+            }
+            else
+            {
+                var texto = new List<string>(cabecalhoTexto) { "", string.Join("  |  ", cab), new string('-', 60) };
+                texto.AddRange(linhas.Select(l => string.Join("  |  ", l)));
+                bytes = ArquivoRelatorio.Pdf(texto);
+            }
+
+            var nome = $"{def.Id}-{periodo}-{DateTime.Now:HHmm}.{formato.ToLower()}";
+            var caminho = Path.Combine(FileSystem.CacheDirectory, nome);
+            await System.IO.File.WriteAllBytesAsync(caminho, bytes);
+            await Share.Default.RequestAsync(new ShareFileRequest { Title = def.Titulo, File = new ShareFile(caminho) });
+            Registrar(def.Titulo, "Concluído");
+        }
+        catch (Exception)
+        {
+            Registrar(def.Titulo, "Erro");
+            aviso = "Não foi possível gerar ou compartilhar o arquivo.";
+        }
+        finally
+        {
+            ocupado = "";
+        }
+    }
+
+    async Task<(string[] cab, List<string[]> linhas, List<string> resumo)> Montar(string id)
+    {
+        if (!DateTime.TryParseExact(periodo + "-01", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var inicio))
+            inicio = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        var fim = inicio.AddMonths(1);
+        var hoje = DateTime.Today;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var linhas = new List<string[]>();
+        var resumo = new List<string>();
+        string[] cab;
+
+        switch (id)
+        {
+            case "fechamento":
+            {
+                cab = new[] { "Data", "Itens", "Valor" };
+                var vendas = (await db.Vendas.Include(v => v.Itens)
+                    .Where(v => v.DataVenda >= inicio && v.DataVenda < fim).ToListAsync())
+                    .OrderBy(v => v.DataVenda).ToList();
+                foreach (var v in vendas)
+                    linhas.Add(new[] { v.DataVenda.ToString("dd/MM/yyyy HH:mm"), v.Itens.Sum(i => i.Quantidade).ToString(), v.ValorTotal.ToString("C2", Br) });
+                var total = vendas.Sum(v => v.ValorTotal);
+                resumo.Add($"Vendas no período: {vendas.Count}");
+                resumo.Add($"Faturamento: {total.ToString("C2", Br)}");
+                resumo.Add($"Ticket médio: {(vendas.Count == 0 ? 0m : total / vendas.Count).ToString("C2", Br)}");
+                break;
+            }
+            case "impacto":
+            {
+                cab = new[] { "Produto", "Lote", "Qtd", "Validade", "Situação", "Valor em risco" };
+                var lotes = await db.Lotes.Include(l => l.Produto)
+                    .Where(l => l.QuantidadeAtual > 0 && l.DataValidade < hoje.AddDays(31))
+                    .OrderBy(l => l.DataValidade).ToListAsync();
+                decimal risco = 0;
+                foreach (var l in lotes)
+                {
+                    var dias = (l.DataValidade.Date - hoje).Days;
+                    var valor = l.QuantidadeAtual * (l.Produto?.PrecoPromocional ?? l.Produto?.PrecoVenda ?? 0);
+                    risco += valor;
+                    linhas.Add(new[] { l.Produto?.Nome ?? "-", l.CodigoLote ?? "-", l.QuantidadeAtual.ToString(),
+                        l.DataValidade.ToString("dd/MM/yyyy"), dias < 0 ? "Vencido" : $"{dias} dia(s)", valor.ToString("C2", Br) });
+                }
+                resumo.Add($"Lotes em risco (vencidos ou até 30 dias): {lotes.Count}");
+                resumo.Add($"Valor em risco: {risco.ToString("C2", Br)}");
+                break;
+            }
+            case "fornecedores":
+            {
+                cab = new[] { "Fornecedor", "Categoria", "Prazo (dias)", "Preço médio", "Nota" };
+                var forn = await db.Fornecedores.OrderByDescending(f => f.ScorePerformance).ToListAsync();
+                foreach (var f in forn)
+                    linhas.Add(new[] { f.NomeFantasia, f.CategoriaFornecida, f.PrazoEntregaDias.ToString(), f.PrecoMedioFornecido.ToString("C2", Br), f.ScorePerformance.ToString("0.0") });
+                resumo.Add($"Fornecedores cadastrados: {forn.Count}");
+                resumo.Add($"Nota média: {(forn.Count == 0 ? 0 : forn.Average(f => f.ScorePerformance)).ToString("0.0")}");
+                resumo.Add($"Prazo médio de entrega: {(forn.Count == 0 ? 0 : forn.Average(f => f.PrazoEntregaDias)).ToString("0.0")} dia(s)");
+                break;
+            }
+            case "equipe":
+            {
+                cab = new[] { "Funcionário", "E-mail", "Ações de promoção" };
+                var funcs = await db.Funcionarios.Where(f => f.Ativo).OrderBy(f => f.Nome).ToListAsync();
+                var acoes = await db.PromocoesHistorico.Where(h => h.Data >= inicio && h.Data < fim).ToListAsync();
+                foreach (var f in funcs)
+                    linhas.Add(new[] { f.Nome, f.Email, acoes.Count(a => a.Usuario == f.Nome).ToString() });
+                resumo.Add($"Funcionários ativos: {funcs.Count}");
+                resumo.Add($"Ações de promoção no período: {acoes.Count}");
+                break;
+            }
+            default:
+            {
+                cab = new[] { "Produto", "ID", "Estoque", "Preço", "Valor em estoque" };
+                var produtos = await db.Produtos.Include(p => p.Lotes).OrderBy(p => p.Nome).ToListAsync();
+                foreach (var p in produtos)
+                {
+                    var qtd = p.Lotes.Sum(l => l.QuantidadeAtual);
+                    linhas.Add(new[] { p.Nome, p.Id.ToString(), qtd.ToString(), p.PrecoVenda.ToString("C2", Br), (qtd * (p.PrecoPromocional ?? p.PrecoVenda)).ToString("C2", Br) });
+                }
+                resumo.Add($"Produtos: {produtos.Count}");
+                resumo.Add($"Unidades em estoque: {produtos.Sum(p => p.Lotes.Sum(l => l.QuantidadeAtual))}");
+                resumo.Add($"Valor em estoque: {produtos.Sum(p => p.Lotes.Sum(l => l.QuantidadeAtual) * (p.PrecoPromocional ?? p.PrecoVenda)).ToString("C2", Br)}");
+                break;
+            }
+        }
+        return (cab, linhas, resumo);
+    }
+}

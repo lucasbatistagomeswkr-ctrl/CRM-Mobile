@@ -135,3 +135,16 @@ h3 { color: var(--verde); font-weight: 800; }
     box-shadow: 0 15px 35px rgba(0,0,0,.2); width: 100%; max-width: 350px; text-align: center; }
 .login-logo { font-style: italic; font-weight: 800; font-size: 2rem; margin-bottom: 24px;
     background: linear-gradient(90deg, #0ABFAD, #045951); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+    /* Fonte do logo (igual ao site) */
+@font-face {
+    font-family: 'Segoe UI Logo';
+    src: url('fonts/segoeui-bolditalic.ttf') format('truetype');
+    font-weight: 800;
+    font-style: italic;
+}
+.app-logo, .login-logo {
+    font-family: 'Segoe UI Logo', 'Segoe UI', sans-serif;
+    font-style: italic;
+    font-weight: 800;
+}

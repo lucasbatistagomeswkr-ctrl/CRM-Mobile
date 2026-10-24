@@ -8,86 +8,153 @@
 
 <h3 class="mb-3">Lotes</h3>
 
+<input class="form-control mb-3" placeholder="Buscar por nome, ID ou código do lote"
+       value="@busca" @oninput="AoBuscar" />
+
 @if (!produtos.Any())
 {
-    <p class="text-muted">Cadastre um produto antes de criar lotes.</p>
+    <p class="text-muted">Cadastre um produto para criar lotes.</p>
 }
-else
+else if (!Filtrados.Any())
 {
-    <button class="btn btn-primary w-100 mb-3" @onclick="Novo">Novo lote</button>
-}
-
-@if (editando != null)
-{
-    <div class="card card-body mb-3">
-        <select class="form-select mb-2" @bind="editando.ProdutoId">
-            <option value="0">Selecione o produto</option>
-            @foreach (var p in produtos)
-            {
-                <option value="@p.Id">@p.Nome</option>
-            }
-        </select>
-        <input class="form-control mb-2" placeholder="Código do lote" @bind="editando.CodigoLote" />
-        <input class="form-control mb-2" type="number" min="0" placeholder="Quantidade" @bind="editando.QuantidadeAtual" />
-
-        <label class="form-label">Validade</label>
-        <div class="input-group mb-2">
-            <input class="form-control" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa"
-                   value="@validadeTexto" @oninput="AoDigitar" />
-            <button class="btn btn-outline-primary" type="button" @onclick="AbrirCalendario">📅</button>
-        </div>
-        <input id="validade-picker" type="date" tabindex="-1" aria-hidden="true"
-               style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;"
-               value="@editando.DataValidade.ToString("yyyy-MM-dd")" @onchange="AoEscolher" />
-
-        @if (!string.IsNullOrEmpty(erro))
-        {
-            <div class="text-danger mb-2">@erro</div>
-        }
-        <div class="d-flex gap-2">
-            <button class="btn btn-success flex-fill" @onclick="Salvar">Salvar</button>
-            <button class="btn btn-outline-secondary flex-fill" @onclick="Cancelar">Cancelar</button>
-        </div>
-    </div>
+    <p class="text-muted">Nenhum produto encontrado.</p>
 }
 
-@foreach (var l in lotes)
+@foreach (var p in Filtrados)
 {
+    var ativos = p.Lotes.Where(Ativo).OrderBy(l => l.DataValidade).ToList();
+    var anteriores = p.Lotes.Where(l => !Ativo(l)).OrderByDescending(l => l.DataValidade).ToList();
+    var aberto = abertos.Contains(p.Id) || editando?.ProdutoId == p.Id;
+
     <div class="card card-body mb-2">
-        <strong>@l.Produto?.Nome</strong>
-        <small class="text-muted">Lote @l.CodigoLote</small>
-        <div>Estoque: @l.QuantidadeAtual de @l.QuantidadeInicial</div>
-        <div class="@Classe(l)">@Situacao(l)</div>
-        <div class="d-flex gap-2 mt-2">
-            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(l)">Editar</button>
-            <button class="btn btn-sm btn-outline-danger" @onclick="() => Excluir(l)">Excluir</button>
+        <div class="d-flex justify-content-between align-items-start" style="cursor:pointer" @onclick="() => Alternar(p.Id)">
+            <div>
+                <strong>@p.Nome</strong> <small class="text-muted">ID #@p.Id</small>
+                <div class="small text-muted">
+                    @ativos.Count ativo(s) - @ativos.Sum(l => l.QuantidadeAtual) un. em estoque - @anteriores.Count anterior(es)
+                </div>
+            </div>
+            <span>@(aberto ? "▲" : "▼")</span>
         </div>
+
+        @if (aberto)
+        {
+            @if (editando != null && editando.ProdutoId == p.Id)
+            {
+                <div class="border rounded p-2 mt-3">
+                    <strong>@(editando.Id == 0 ? "Novo lote" : "Editar lote")</strong>
+                    <input class="form-control my-2" placeholder="Código do lote" @bind="editando.CodigoLote" />
+                    <input class="form-control mb-2" type="number" min="0" placeholder="Quantidade" @bind="editando.QuantidadeAtual" />
+
+                    <label class="form-label">Validade</label>
+                    <div class="input-group mb-2">
+                        <input class="form-control" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa"
+                               value="@validadeTexto" @oninput="AoDigitar" />
+                        <button class="btn btn-outline-primary" type="button" @onclick="AbrirCalendario">📅</button>
+                    </div>
+                    <input id="validade-picker" type="date" tabindex="-1" aria-hidden="true"
+                           style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;"
+                           value="@editando.DataValidade.ToString("yyyy-MM-dd")" @onchange="AoEscolher" />
+
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-success flex-fill" @onclick="Salvar">Salvar</button>
+                        <button class="btn btn-outline-secondary flex-fill" @onclick="Cancelar">Cancelar</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button class="btn btn-sm btn-primary mt-3 align-self-start" @onclick="() => Novo(p.Id)">+ Novo lote</button>
+            }
+
+            @if (erroProdutoId == p.Id && !string.IsNullOrEmpty(erro))
+            {
+                <div class="text-danger mt-2">@erro</div>
+            }
+
+            <div class="fw-bold mt-3 mb-1">Ativos (@ativos.Count)</div>
+            @if (!ativos.Any())
+            {
+                <div class="small text-muted mb-2">Nenhum lote ativo.</div>
+            }
+            @foreach (var l in ativos)
+            {
+                @LoteLinha(l)
+            }
+
+            <div class="fw-bold mt-2 mb-1">Anteriores - vencidos ou esgotados (@anteriores.Count)</div>
+            @if (!anteriores.Any())
+            {
+                <div class="small text-muted">Nenhum lote anterior.</div>
+            }
+            @foreach (var l in anteriores)
+            {
+                @LoteLinha(l)
+            }
+        }
     </div>
 }
 
 @code {
-    List<Lote> lotes = new();
     List<Produto> produtos = new();
     Lote? editando;
-    string erro = "";
-    string validadeTexto = "";
+    string busca = "", erro = "", validadeTexto = "";
+    int erroProdutoId;
+    HashSet<int> abertos = new();
 
     protected override async Task OnInitializedAsync() => await Carregar();
 
     async Task Carregar()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        produtos = await db.Produtos.OrderBy(p => p.Nome).ToListAsync();
-        lotes = await db.Lotes.Include(l => l.Produto).OrderBy(l => l.DataValidade).ToListAsync();
+        produtos = await db.Produtos.Include(p => p.Lotes).OrderBy(p => p.Nome).ToListAsync();
     }
+
+    IEnumerable<Produto> Filtrados
+    {
+        get
+        {
+            var b = busca.Trim();
+            if (b.Length == 0) return produtos;
+            return produtos.Where(p =>
+                p.Nome.Contains(b, StringComparison.OrdinalIgnoreCase)
+                || p.Id.ToString() == b.TrimStart('#')
+                || p.Lotes.Any(l => (l.CodigoLote ?? "").Contains(b, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    RenderFragment<Lote> LoteLinha => l => @<div class="border rounded p-2 mb-2">
+        <div><strong>Lote @(string.IsNullOrWhiteSpace(l.CodigoLote) ? "sem código" : l.CodigoLote)</strong></div>
+        <div class="@Classe(l)">@Situacao(l)</div>
+        <div class="small text-muted">Estoque: @l.QuantidadeAtual de @l.QuantidadeInicial - recebido em @l.DataRecebimento.ToString("dd/MM/yyyy")</div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(l)">Editar</button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => Excluir(l)">Excluir</button>
+        </div>
+    </div>;
+
+    bool Ativo(Lote l) => l.QuantidadeAtual > 0 && l.DataValidade.Date >= DateTime.Today;
 
     int Dias(Lote l) => (l.DataValidade.Date - DateTime.Today).Days;
 
-    string Classe(Lote l) => Dias(l) < 0 ? "text-danger" : Dias(l) <= 7 ? "text-warning" : "text-success";
+    string Classe(Lote l) => l.QuantidadeAtual == 0 ? "text-muted"
+        : Dias(l) < 0 ? "text-danger" : Dias(l) <= 7 ? "text-warning" : "text-success";
 
-    string Situacao(Lote l) => Dias(l) < 0
-        ? $"Vencido em {l.DataValidade:dd/MM/yyyy}"
+    string Situacao(Lote l) => l.QuantidadeAtual == 0 ? "Esgotado"
+        : Dias(l) < 0 ? $"Vencido em {l.DataValidade:dd/MM/yyyy}"
         : $"Vence em {Dias(l)} dia(s) ({l.DataValidade:dd/MM/yyyy})";
+
+    void Alternar(int id)
+    {
+        if (!abertos.Remove(id)) abertos.Add(id);
+    }
+
+    void AoBuscar(ChangeEventArgs e)
+    {
+        busca = e.Value?.ToString() ?? "";
+        var achados = Filtrados.ToList();
+        if (achados.Count == 1) abertos.Add(achados[0].Id);
+    }
 
     // Digitação com máscara: só números, as barras entram sozinhas
     void AoDigitar(ChangeEventArgs e)
@@ -122,16 +189,18 @@ else
         catch { }
     }
 
-    void Novo()
+    void Novo(int produtoId)
     {
         erro = "";
-        editando = new Lote { DataValidade = DateTime.Today.AddMonths(1) };
+        abertos.Add(produtoId);
+        editando = new Lote { ProdutoId = produtoId, DataValidade = DateTime.Today.AddMonths(1) };
         validadeTexto = editando.DataValidade.ToString("dd/MM/yyyy");
     }
 
     void Editar(Lote l)
     {
         erro = "";
+        abertos.Add(l.ProdutoId);
         editando = new Lote
         {
             Id = l.Id,
@@ -145,13 +214,20 @@ else
         validadeTexto = l.DataValidade.ToString("dd/MM/yyyy");
     }
 
-    void Cancelar() => editando = null;
+    void Cancelar()
+    {
+        erro = "";
+        editando = null;
+    }
 
     async Task Salvar()
     {
         if (editando == null) return;
-        if (editando.ProdutoId == 0) { erro = "Selecione o produto."; return; }
-        if (editando.QuantidadeAtual <= 0) { erro = "Informe uma quantidade maior que zero."; return; }
+        erro = "";
+        erroProdutoId = editando.ProdutoId;
+
+        if (editando.Id == 0 && editando.QuantidadeAtual <= 0) { erro = "Informe uma quantidade maior que zero."; return; }
+        if (editando.QuantidadeAtual < 0) { erro = "A quantidade não pode ser negativa."; return; }
         if (!DateTime.TryParseExact(validadeTexto, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var validade))
         {
             erro = "Digite a validade no formato dd/mm/aaaa.";
@@ -168,6 +244,8 @@ else
         }
         else
         {
+            if (editando.QuantidadeAtual > editando.QuantidadeInicial)
+                editando.QuantidadeInicial = editando.QuantidadeAtual;
             db.Lotes.Update(editando);
         }
         await db.SaveChangesAsync();
@@ -177,7 +255,14 @@ else
 
     async Task Excluir(Lote l)
     {
+        erro = "";
+        erroProdutoId = l.ProdutoId;
         await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.ItensVenda.AnyAsync(i => i.LoteId == l.Id))
+        {
+            erro = "Este lote já tem vendas registradas e não pode ser excluído. Ele fica no histórico.";
+            return;
+        }
         db.Lotes.Remove(l);
         await db.SaveChangesAsync();
         await Carregar();
