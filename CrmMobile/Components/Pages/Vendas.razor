@@ -1,0 +1,136 @@
+@page "/vendas"
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<h3 class="mb-3">Vendas</h3>
+
+<div class="card card-body mb-3">
+    <select class="form-select mb-2" @bind="loteId">
+        <option value="0">Selecione produto e lote</option>
+        @foreach (var l in disponiveis)
+        {
+            <option value="@l.Id">@l.Produto?.Nome - lote @l.CodigoLote (estoque @l.QuantidadeAtual)</option>
+        }
+    </select>
+    <input class="form-control mb-2" type="number" min="1" placeholder="Quantidade" @bind="quantidade" />
+    @if (!string.IsNullOrEmpty(erro))
+    {
+        <div class="text-danger mb-2">@erro</div>
+    }
+    <button class="btn btn-primary" @onclick="Adicionar">Adicionar ao carrinho</button>
+</div>
+
+@if (carrinho.Any())
+{
+    <div class="card card-body mb-3">
+        <h5>Carrinho</h5>
+        @foreach (var c in carrinho)
+        {
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span>@c.Quantidade x @c.Nome</span>
+                <span>
+                    @((c.Quantidade * c.Preco).ToString("C2"))
+                    <button class="btn btn-sm btn-outline-danger ms-2" @onclick="() => Remover(c)">X</button>
+                </span>
+            </div>
+        }
+        <hr />
+        <div class="d-flex justify-content-between mb-2">
+            <strong>Total</strong>
+            <strong>@carrinho.Sum(c => c.Quantidade * c.Preco).ToString("C2")</strong>
+        </div>
+        <button class="btn btn-success" @onclick="Finalizar">Finalizar venda</button>
+    </div>
+}
+
+<h5>Últimas vendas</h5>
+@if (!vendas.Any())
+{
+    <p class="text-muted">Nenhuma venda registrada ainda.</p>
+}
+@foreach (var v in vendas)
+{
+    <div class="card card-body mb-2">
+        <div>@v.DataVenda.ToString("dd/MM/yyyy HH:mm")</div>
+        <strong>@v.ValorTotal.ToString("C2")</strong>
+    </div>
+}
+
+@code {
+    class ItemCarrinho
+    {
+        public int LoteId { get; set; }
+        public string Nome { get; set; } = "";
+        public int Quantidade { get; set; }
+        public decimal Preco { get; set; }
+    }
+
+    List<Lote> disponiveis = new();
+    List<Venda> vendas = new();
+    List<ItemCarrinho> carrinho = new();
+    int loteId;
+    int quantidade = 1;
+    string erro = "";
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    async Task Carregar()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        disponiveis = await db.Lotes.Include(l => l.Produto)
+            .Where(l => l.QuantidadeAtual > 0 && l.DataValidade >= DateTime.Today)
+            .OrderBy(l => l.DataValidade).ToListAsync();
+        vendas = await db.Vendas.OrderByDescending(v => v.DataVenda).Take(10).ToListAsync();
+    }
+
+    void Adicionar()
+    {
+        erro = "";
+        var lote = disponiveis.FirstOrDefault(l => l.Id == loteId);
+        if (lote == null) { erro = "Selecione um lote."; return; }
+        if (quantidade <= 0) { erro = "Informe uma quantidade maior que zero."; return; }
+
+        var jaNoCarrinho = carrinho.Where(c => c.LoteId == loteId).Sum(c => c.Quantidade);
+        if (jaNoCarrinho + quantidade > lote.QuantidadeAtual)
+        {
+            erro = $"Estoque insuficiente. Disponível: {lote.QuantidadeAtual - jaNoCarrinho}.";
+            return;
+        }
+
+        var preco = lote.Produto?.PrecoPromocional ?? lote.Produto?.PrecoVenda ?? 0;
+        var existente = carrinho.FirstOrDefault(c => c.LoteId == loteId);
+        if (existente != null) existente.Quantidade += quantidade;
+        else carrinho.Add(new ItemCarrinho { LoteId = loteId, Nome = lote.Produto?.Nome ?? "", Quantidade = quantidade, Preco = preco });
+
+        quantidade = 1;
+    }
+
+    void Remover(ItemCarrinho c) => carrinho.Remove(c);
+
+    async Task Finalizar()
+    {
+        erro = "";
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var venda = new Venda { DataVenda = DateTime.Now, ValorTotal = carrinho.Sum(c => c.Quantidade * c.Preco) };
+
+        foreach (var c in carrinho)
+        {
+            var lote = await db.Lotes.FindAsync(c.LoteId);
+            if (lote == null || lote.QuantidadeAtual < c.Quantidade)
+            {
+                erro = $"Estoque insuficiente para {c.Nome}.";
+                return;
+            }
+            lote.QuantidadeAtual -= c.Quantidade;
+            venda.Itens.Add(new ItemVenda { LoteId = c.LoteId, Quantidade = c.Quantidade, PrecoUnitario = c.Preco });
+        }
+
+        db.Vendas.Add(venda);
+        await db.SaveChangesAsync();
+        carrinho.Clear();
+        loteId = 0;
+        await Carregar();
+    }
+}

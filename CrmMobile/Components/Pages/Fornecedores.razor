@@ -1,0 +1,123 @@
+@page "/fornecedores"
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<h3 class="mb-3">Fornecedores</h3>
+
+<button class="btn btn-primary w-100 mb-3" @onclick="Novo">Novo fornecedor</button>
+
+@if (editando != null)
+{
+    <div class="card card-body mb-3">
+        <input class="form-control mb-2" placeholder="Nome fantasia" @bind="editando.NomeFantasia" />
+        <input class="form-control mb-2" placeholder="CNPJ" @bind="editando.CNPJ" />
+        <input class="form-control mb-2" placeholder="Categoria (ex: Laticínios)" @bind="editando.CategoriaFornecida" />
+        <input class="form-control mb-2" type="number" step="0.01" placeholder="Preço médio fornecido" @bind="editando.PrecoMedioFornecido" />
+        <input class="form-control mb-2" type="number" min="0" placeholder="Prazo de entrega (dias)" @bind="editando.PrazoEntregaDias" />
+        <label class="form-label">Última entrega</label>
+        <input class="form-control mb-2" type="date" @bind="editando.DataUltimaEntrega" />
+        <input class="form-control mb-2" type="number" step="0.1" min="0" max="10" placeholder="Nota de desempenho (0 a 10)" @bind="editando.ScorePerformance" />
+        @if (!string.IsNullOrEmpty(erro))
+        {
+            <div class="text-danger mb-2">@erro</div>
+        }
+        <div class="d-flex gap-2">
+            <button class="btn btn-success flex-fill" @onclick="Salvar">Salvar</button>
+            <button class="btn btn-outline-secondary flex-fill" @onclick="Cancelar">Cancelar</button>
+        </div>
+    </div>
+}
+
+@if (!fornecedores.Any())
+{
+    <p class="text-muted">Nenhum fornecedor cadastrado. Toque em "Novo fornecedor" para começar.</p>
+}
+
+@foreach (var f in fornecedores)
+{
+    <div class="card card-body mb-2">
+        <strong>@f.NomeFantasia</strong>
+        <small class="text-muted">
+            @f.CategoriaFornecida@(string.IsNullOrWhiteSpace(f.CNPJ) ? "" : " - CNPJ " + f.CNPJ)
+        </small>
+        <div>Entrega em @f.PrazoEntregaDias dia(s) - preço médio @f.PrecoMedioFornecido.ToString("C2")</div>
+        <div>Última entrega: @f.DataUltimaEntrega.ToString("dd/MM/yyyy")</div>
+        <div class="@ClasseNota(f) fw-bold">Nota @f.ScorePerformance.ToString("0.0") de 10</div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(f)">Editar</button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => Excluir(f)">Excluir</button>
+        </div>
+    </div>
+}
+
+@code {
+    List<Fornecedor> fornecedores = new();
+    Fornecedor? editando;
+    string erro = "";
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    async Task Carregar()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        fornecedores = await db.Fornecedores.OrderBy(f => f.NomeFantasia).ToListAsync();
+    }
+
+    string ClasseNota(Fornecedor f) =>
+        f.ScorePerformance >= 8 ? "text-success" : f.ScorePerformance >= 5 ? "text-warning" : "text-danger";
+
+    void Novo()
+    {
+        erro = "";
+        editando = new Fornecedor
+        {
+            NomeFantasia = "",
+            CNPJ = "",
+            CategoriaFornecida = "",
+            DataUltimaEntrega = DateTime.Today
+        };
+    }
+
+    void Editar(Fornecedor f)
+    {
+        erro = "";
+        editando = new Fornecedor
+        {
+            Id = f.Id,
+            NomeFantasia = f.NomeFantasia,
+            CNPJ = f.CNPJ,
+            CategoriaFornecida = f.CategoriaFornecida,
+            PrecoMedioFornecido = f.PrecoMedioFornecido,
+            DataUltimaEntrega = f.DataUltimaEntrega,
+            PrazoEntregaDias = f.PrazoEntregaDias,
+            ScorePerformance = f.ScorePerformance
+        };
+    }
+
+    void Cancelar() => editando = null;
+
+    async Task Salvar()
+    {
+        if (editando == null) return;
+        if (string.IsNullOrWhiteSpace(editando.NomeFantasia)) { erro = "Informe o nome fantasia."; return; }
+        if (string.IsNullOrWhiteSpace(editando.CategoriaFornecida)) { erro = "Informe a categoria."; return; }
+        if (editando.ScorePerformance < 0 || editando.ScorePerformance > 10) { erro = "A nota deve ficar entre 0 e 10."; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (editando.Id == 0) db.Fornecedores.Add(editando);
+        else db.Fornecedores.Update(editando);
+        await db.SaveChangesAsync();
+        editando = null;
+        await Carregar();
+    }
+
+    async Task Excluir(Fornecedor f)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Fornecedores.Remove(f);
+        await db.SaveChangesAsync();
+        await Carregar();
+    }
+}

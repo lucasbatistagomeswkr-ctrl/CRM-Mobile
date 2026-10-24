@@ -1,0 +1,45 @@
+@using CrmMobile.Services
+@inject AuthService Auth
+
+<div class="login-bg">
+    <div class="login-card">
+        <div class="login-logo">Stoque.me</div>
+        <h5 class="mb-3">@(primeiroAcesso ? "Criar primeiro acesso" : "Acesse seu painel")</h5>
+
+        @if (primeiroAcesso)
+        {
+            <input class="form-control mb-2" placeholder="Nome" @bind="nome" />
+        }
+        <input class="form-control mb-2" type="email" placeholder="E-mail" @bind="email" />
+        <input class="form-control mb-2" type="password" placeholder="Senha" @bind="senha" />
+
+        @if (!string.IsNullOrEmpty(erro))
+        {
+            <div class="text-danger mb-2">@erro</div>
+        }
+
+        <button class="btn btn-primary w-100 mt-2" @onclick="Enviar">
+            @(primeiroAcesso ? "Criar conta e entrar" : "Entrar no sistema")
+        </button>
+    </div>
+</div>
+
+@code {
+    bool primeiroAcesso;
+    string nome = "", email = "", senha = "", erro = "";
+
+    protected override async Task OnInitializedAsync()
+        => primeiroAcesso = !await Auth.ExisteFuncionarioAsync();
+
+    async Task Enviar()
+    {
+        erro = "";
+        if (primeiroAcesso)
+        {
+            var r = await Auth.CadastrarAsync(nome, email, senha);
+            if (r != null) { erro = r; return; }
+        }
+        var e = await Auth.EntrarAsync(email, senha);
+        if (e != null) erro = e;
+    }
+}

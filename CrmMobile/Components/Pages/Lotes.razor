@@ -1,0 +1,185 @@
+@page "/lotes"
+@using System.Globalization
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<h3 class="mb-3">Lotes</h3>
+
+@if (!produtos.Any())
+{
+    <p class="text-muted">Cadastre um produto antes de criar lotes.</p>
+}
+else
+{
+    <button class="btn btn-primary w-100 mb-3" @onclick="Novo">Novo lote</button>
+}
+
+@if (editando != null)
+{
+    <div class="card card-body mb-3">
+        <select class="form-select mb-2" @bind="editando.ProdutoId">
+            <option value="0">Selecione o produto</option>
+            @foreach (var p in produtos)
+            {
+                <option value="@p.Id">@p.Nome</option>
+            }
+        </select>
+        <input class="form-control mb-2" placeholder="Código do lote" @bind="editando.CodigoLote" />
+        <input class="form-control mb-2" type="number" min="0" placeholder="Quantidade" @bind="editando.QuantidadeAtual" />
+
+        <label class="form-label">Validade</label>
+        <div class="input-group mb-2">
+            <input class="form-control" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa"
+                   value="@validadeTexto" @oninput="AoDigitar" />
+            <button class="btn btn-outline-primary" type="button" @onclick="AbrirCalendario">📅</button>
+        </div>
+        <input id="validade-picker" type="date" tabindex="-1" aria-hidden="true"
+               style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;"
+               value="@editando.DataValidade.ToString("yyyy-MM-dd")" @onchange="AoEscolher" />
+
+        @if (!string.IsNullOrEmpty(erro))
+        {
+            <div class="text-danger mb-2">@erro</div>
+        }
+        <div class="d-flex gap-2">
+            <button class="btn btn-success flex-fill" @onclick="Salvar">Salvar</button>
+            <button class="btn btn-outline-secondary flex-fill" @onclick="Cancelar">Cancelar</button>
+        </div>
+    </div>
+}
+
+@foreach (var l in lotes)
+{
+    <div class="card card-body mb-2">
+        <strong>@l.Produto?.Nome</strong>
+        <small class="text-muted">Lote @l.CodigoLote</small>
+        <div>Estoque: @l.QuantidadeAtual de @l.QuantidadeInicial</div>
+        <div class="@Classe(l)">@Situacao(l)</div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(l)">Editar</button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => Excluir(l)">Excluir</button>
+        </div>
+    </div>
+}
+
+@code {
+    List<Lote> lotes = new();
+    List<Produto> produtos = new();
+    Lote? editando;
+    string erro = "";
+    string validadeTexto = "";
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    async Task Carregar()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        produtos = await db.Produtos.OrderBy(p => p.Nome).ToListAsync();
+        lotes = await db.Lotes.Include(l => l.Produto).OrderBy(l => l.DataValidade).ToListAsync();
+    }
+
+    int Dias(Lote l) => (l.DataValidade.Date - DateTime.Today).Days;
+
+    string Classe(Lote l) => Dias(l) < 0 ? "text-danger" : Dias(l) <= 7 ? "text-warning" : "text-success";
+
+    string Situacao(Lote l) => Dias(l) < 0
+        ? $"Vencido em {l.DataValidade:dd/MM/yyyy}"
+        : $"Vence em {Dias(l)} dia(s) ({l.DataValidade:dd/MM/yyyy})";
+
+    // Digitação com máscara: só números, as barras entram sozinhas
+    void AoDigitar(ChangeEventArgs e)
+    {
+        var digitos = new string((e.Value?.ToString() ?? "").Where(char.IsDigit).Take(8).ToArray());
+        var texto = digitos;
+        if (digitos.Length > 4) texto = $"{digitos[..2]}/{digitos[2..4]}/{digitos[4..]}";
+        else if (digitos.Length > 2) texto = $"{digitos[..2]}/{digitos[2..]}";
+        validadeTexto = texto;
+
+        if (editando != null &&
+            DateTime.TryParseExact(texto, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+        {
+            editando.DataValidade = d;
+        }
+    }
+
+    // Escolha pelo calendário
+    void AoEscolher(ChangeEventArgs e)
+    {
+        if (editando != null &&
+            DateTime.TryParseExact(e.Value?.ToString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+        {
+            editando.DataValidade = d;
+            validadeTexto = d.ToString("dd/MM/yyyy");
+        }
+    }
+
+    async Task AbrirCalendario()
+    {
+        try { await JS.InvokeVoidAsync("eval", "document.getElementById('validade-picker')?.showPicker()"); }
+        catch { }
+    }
+
+    void Novo()
+    {
+        erro = "";
+        editando = new Lote { DataValidade = DateTime.Today.AddMonths(1) };
+        validadeTexto = editando.DataValidade.ToString("dd/MM/yyyy");
+    }
+
+    void Editar(Lote l)
+    {
+        erro = "";
+        editando = new Lote
+        {
+            Id = l.Id,
+            ProdutoId = l.ProdutoId,
+            CodigoLote = l.CodigoLote,
+            QuantidadeInicial = l.QuantidadeInicial,
+            QuantidadeAtual = l.QuantidadeAtual,
+            DataRecebimento = l.DataRecebimento,
+            DataValidade = l.DataValidade
+        };
+        validadeTexto = l.DataValidade.ToString("dd/MM/yyyy");
+    }
+
+    void Cancelar() => editando = null;
+
+    async Task Salvar()
+    {
+        if (editando == null) return;
+        if (editando.ProdutoId == 0) { erro = "Selecione o produto."; return; }
+        if (editando.QuantidadeAtual <= 0) { erro = "Informe uma quantidade maior que zero."; return; }
+        if (!DateTime.TryParseExact(validadeTexto, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var validade))
+        {
+            erro = "Digite a validade no formato dd/mm/aaaa.";
+            return;
+        }
+        editando.DataValidade = validade;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (editando.Id == 0)
+        {
+            editando.QuantidadeInicial = editando.QuantidadeAtual;
+            editando.DataRecebimento = DateTime.Now;
+            db.Lotes.Add(editando);
+        }
+        else
+        {
+            db.Lotes.Update(editando);
+        }
+        await db.SaveChangesAsync();
+        editando = null;
+        await Carregar();
+    }
+
+    async Task Excluir(Lote l)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Lotes.Remove(l);
+        await db.SaveChangesAsync();
+        await Carregar();
+    }
+}

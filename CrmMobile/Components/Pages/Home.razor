@@ -1,0 +1,109 @@
+﻿@page "/"
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@using CrmMobile.Services
+@inject AuthService Auth
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<PageTitle>Início</PageTitle>
+
+<div class="banner">
+    <h1 class="h4 m-0">Olá, @Auth.Usuario?.Nome! 👋</h1>
+    <small>Resumo do seu estoque</small>
+</div>
+
+<div class="row g-2 mb-3">
+    <div class="col-6">
+        <div class="card card-body text-center">
+            <div class="fs-2">@totalProdutos</div>
+            <small class="text-muted">Produtos cadastrados</small>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card card-body text-center">
+            <div class="fs-2">@unidadesEstoque</div>
+            <small class="text-muted">Unidades em estoque</small>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card card-body text-center">
+            <div class="fs-2">@vendasHoje</div>
+            <small class="text-muted">Vendas hoje</small>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card card-body text-center">
+            <div class="fs-2">@faturamentoHoje.ToString("C2")</div>
+            <small class="text-muted">Faturamento hoje</small>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card card-body text-center border-danger">
+            <div class="fs-2 text-danger">@lotesVencidos</div>
+            <small class="text-muted">Lotes vencidos</small>
+        </div>
+    </div>
+    <div class="col-6">
+        <div class="card card-body text-center border-warning">
+            <div class="fs-2 text-warning">@lotesVencendo</div>
+            <small class="text-muted">Vencem em 7 dias</small>
+        </div>
+    </div>
+</div>
+
+<h5>Lotes que precisam de atenção</h5>
+@if (!alertas.Any())
+{
+    <p class="text-muted">Nenhum lote vencido ou perto de vencer.</p>
+}
+@foreach (var l in alertas)
+{
+    var dias = (l.DataValidade.Date - DateTime.Today).Days;
+    <div class="card card-body mb-2">
+        <strong>@l.Produto?.Nome</strong>
+        <small class="text-muted">Lote @l.CodigoLote - @l.QuantidadeAtual unidade(s)</small>
+        <div class="@(dias < 0 ? "text-danger" : "text-warning")">
+            @(dias < 0 ? $"Vencido em {l.DataValidade:dd/MM/yyyy}" : $"Vence em {dias} dia(s)")
+        </div>
+    </div>
+}
+
+<div class="d-flex gap-2 mt-3">
+    <a class="btn btn-primary flex-fill" href="vendas">Nova venda</a>
+    <a class="btn btn-outline-primary flex-fill" href="lotes">Novo lote</a>
+</div>
+
+@code {
+    int totalProdutos;
+    int unidadesEstoque;
+    int vendasHoje;
+    decimal faturamentoHoje;
+    int lotesVencidos;
+    int lotesVencendo;
+    List<Lote> alertas = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var hoje = DateTime.Today;
+
+        totalProdutos = await db.Produtos.CountAsync();
+        unidadesEstoque = await db.Lotes.SumAsync(l => (int?)l.QuantidadeAtual) ?? 0;
+
+        var vendas = await db.Vendas
+            .Where(v => v.DataVenda >= hoje && v.DataVenda < hoje.AddDays(1))
+            .ToListAsync();
+        vendasHoje = vendas.Count;
+        faturamentoHoje = vendas.Sum(v => v.ValorTotal);
+
+        var atencao = await db.Lotes.Include(l => l.Produto)
+            .Where(l => l.QuantidadeAtual > 0 && l.DataValidade < hoje.AddDays(8))
+            .OrderBy(l => l.DataValidade)
+            .ToListAsync();
+
+        lotesVencidos = atencao.Count(l => l.DataValidade.Date < hoje);
+        lotesVencendo = atencao.Count - lotesVencidos;
+        alertas = atencao.Take(5).ToList();
+    }
+}

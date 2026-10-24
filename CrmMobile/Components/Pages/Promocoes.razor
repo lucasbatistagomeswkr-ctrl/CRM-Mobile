@@ -1,0 +1,167 @@
+@page "/promocoes"
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@using CrmMobile.Services
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AuthService Auth
+
+<h3 class="mb-3">Promoções</h3>
+
+<div class="card card-body mb-3">
+    <select class="form-select mb-2" @bind="produtoId">
+        <option value="0">Selecione o produto</option>
+        @foreach (var p in produtos)
+        {
+            <option value="@p.Id">@p.Nome (@p.PrecoVenda.ToString("C2"))</option>
+        }
+    </select>
+    <input class="form-control mb-2" type="number" min="1" max="99" placeholder="Desconto em %" @bind="desconto" />
+    @if (!string.IsNullOrEmpty(erro))
+    {
+        <div class="text-danger mb-2">@erro</div>
+    }
+    <button class="btn btn-primary" @onclick="Aplicar">Aplicar promoção</button>
+</div>
+
+<button class="btn btn-outline-primary w-100 mb-3" @onclick="Desfazer" disabled="@(UltimaDesfazivel() == null)">
+    Desfazer última ação
+</button>
+
+<h5>Em promoção</h5>
+@if (!Ativas.Any())
+{
+    <p class="text-muted">Nenhum produto em promoção.</p>
+}
+@foreach (var p in Ativas)
+{
+    <div class="card card-body mb-2">
+        <strong>@p.Nome</strong>
+        <div>
+            <s class="text-muted">@p.PrecoVenda.ToString("C2")</s>
+            <strong class="text-success ms-2">@p.PrecoPromocional!.Value.ToString("C2")</strong>
+        </div>
+        <div class="mt-2">
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => Remover(p)">Remover promoção</button>
+        </div>
+    </div>
+}
+
+<h5 class="mt-4">Histórico</h5>
+@if (!historico.Any())
+{
+    <p class="text-muted">Nenhuma ação registrada ainda.</p>
+}
+@foreach (var h in historico.Take(10))
+{
+    <div class="card card-body mb-2">
+        <strong>@Rotulo(h.Acao) - @h.Produto?.Nome</strong>
+        <div>@h.PrecoAntigo.ToString("C2") para @h.PrecoAplicado.ToString("C2")</div>
+        <small class="text-muted">@h.Data.ToString("dd/MM/yyyy HH:mm") por @h.Usuario</small>
+    </div>
+}
+
+@code {
+    List<Produto> produtos = new();
+    List<PromocaoHistorico> historico = new();
+    int produtoId;
+    int desconto = 10;
+    string erro = "";
+
+    string Usuario => Auth.Usuario?.Nome ?? "sistema";
+    IEnumerable<Produto> Ativas => produtos.Where(p => p.PrecoPromocional.HasValue);
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    async Task Carregar()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        produtos = await db.Produtos.OrderBy(p => p.Nome).ToListAsync();
+        historico = (await db.PromocoesHistorico.Include(h => h.Produto).ToListAsync())
+            .OrderByDescending(h => h.Id).ToList();
+    }
+
+    static string Rotulo(PromocaoAcao a) => a switch
+    {
+        PromocaoAcao.Aplicado => "Promoção aplicada",
+        PromocaoAcao.Removido => "Promoção removida",
+        PromocaoAcao.Undo => "Ação desfeita",
+        _ => "Ação refeita"
+    };
+
+    async Task Aplicar()
+    {
+        erro = "";
+        if (produtoId == 0) { erro = "Selecione um produto."; return; }
+        if (desconto < 1 || desconto > 99) { erro = "O desconto deve ficar entre 1% e 99%."; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var p = await db.Produtos.FindAsync(produtoId);
+        if (p == null) return;
+
+        var antes = p.PrecoPromocional ?? p.PrecoVenda;
+        var novo = Math.Round(p.PrecoVenda * (100 - desconto) / 100m, 2);
+        p.PrecoPromocional = novo;
+        db.PromocoesHistorico.Add(new PromocaoHistorico
+        {
+            ProdutoId = p.Id, Usuario = Usuario,
+            PrecoAntigo = antes, PrecoAplicado = novo, Acao = PromocaoAcao.Aplicado
+        });
+        await db.SaveChangesAsync();
+        produtoId = 0;
+        await Carregar();
+    }
+
+    async Task Remover(Produto produto)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var p = await db.Produtos.FindAsync(produto.Id);
+        if (p?.PrecoPromocional == null) return;
+
+        var antes = p.PrecoPromocional.Value;
+        p.PrecoPromocional = null;
+        db.PromocoesHistorico.Add(new PromocaoHistorico
+        {
+            ProdutoId = p.Id, Usuario = Usuario,
+            PrecoAntigo = antes, PrecoAplicado = p.PrecoVenda, Acao = PromocaoAcao.Removido
+        });
+        await db.SaveChangesAsync();
+        await Carregar();
+    }
+
+    // Procura a última ação que ainda não foi desfeita
+    PromocaoHistorico? UltimaDesfazivel()
+    {
+        int pulos = 0;
+        foreach (var h in historico)
+        {
+            if (h.Acao == PromocaoAcao.Undo) pulos++;
+            else if (h.Acao is PromocaoAcao.Aplicado or PromocaoAcao.Removido)
+            {
+                if (pulos > 0) pulos--;
+                else return h;
+            }
+        }
+        return null;
+    }
+
+    async Task Desfazer()
+    {
+        var alvo = UltimaDesfazivel();
+        if (alvo == null) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var p = await db.Produtos.FindAsync(alvo.ProdutoId);
+        if (p == null) return;
+
+        var atual = p.PrecoPromocional ?? p.PrecoVenda;
+        p.PrecoPromocional = alvo.PrecoAntigo == p.PrecoVenda ? null : alvo.PrecoAntigo;
+        db.PromocoesHistorico.Add(new PromocaoHistorico
+        {
+            ProdutoId = p.Id, Usuario = Usuario,
+            PrecoAntigo = atual, PrecoAplicado = alvo.PrecoAntigo, Acao = PromocaoAcao.Undo
+        });
+        await db.SaveChangesAsync();
+        await Carregar();
+    }
+}

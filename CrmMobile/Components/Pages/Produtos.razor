@@ -1,0 +1,97 @@
+@page "/produtos"
+@using Microsoft.EntityFrameworkCore
+@using CrmMobile.Data
+@using CrmMobile.Models
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<h3 class="mb-3">Produtos</h3>
+
+<input class="form-control mb-2" placeholder="Buscar produto" @bind="busca" @bind:event="oninput" />
+<button class="btn btn-primary w-100 mb-3" @onclick="Novo">Novo produto</button>
+
+@if (editando != null)
+{
+    <div class="card card-body mb-3">
+        <input class="form-control mb-2" placeholder="Nome" @bind="editando.Nome" />
+        <input class="form-control mb-2" placeholder="Classificação" @bind="editando.Classificacao" />
+        <input class="form-control mb-2" type="number" step="0.01" placeholder="Preço de venda" @bind="editando.PrecoVenda" />
+        <input class="form-control mb-2" type="number" step="0.01" placeholder="Preço promocional (opcional)" @bind="editando.PrecoPromocional" />
+        <div class="d-flex gap-2">
+            <button class="btn btn-success flex-fill" @onclick="Salvar">Salvar</button>
+            <button class="btn btn-outline-secondary flex-fill" @onclick="Cancelar">Cancelar</button>
+        </div>
+    </div>
+}
+
+@if (!Filtrados.Any())
+{
+    <p class="text-muted">Nenhum produto cadastrado. Toque em "Novo produto" para começar.</p>
+}
+
+@foreach (var p in Filtrados)
+{
+    <div class="card card-body mb-2">
+        <strong>@p.Nome</strong>
+        <small class="text-muted">@p.Classificacao</small>
+        <div>
+            @p.PrecoVenda.ToString("C2")
+            @if (p.PrecoPromocional.HasValue)
+            {
+                <span class="text-success ms-2">Promoção: @p.PrecoPromocional.Value.ToString("C2")</span>
+            }
+        </div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(p)">Editar</button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => Excluir(p)">Excluir</button>
+        </div>
+    </div>
+}
+
+@code {
+    List<Produto> produtos = new();
+    Produto? editando;
+    string busca = "";
+
+    IEnumerable<Produto> Filtrados =>
+        produtos.Where(p => p.Nome.Contains(busca, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    async Task Carregar()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        produtos = await db.Produtos.OrderBy(p => p.Nome).ToListAsync();
+    }
+
+    void Novo() => editando = new Produto();
+
+    void Editar(Produto p) => editando = new Produto
+    {
+        Id = p.Id,
+        Nome = p.Nome,
+        Classificacao = p.Classificacao,
+        PrecoVenda = p.PrecoVenda,
+        PrecoPromocional = p.PrecoPromocional
+    };
+
+    void Cancelar() => editando = null;
+
+    async Task Salvar()
+    {
+        if (editando == null || string.IsNullOrWhiteSpace(editando.Nome)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (editando.Id == 0) db.Produtos.Add(editando);
+        else db.Produtos.Update(editando);
+        await db.SaveChangesAsync();
+        editando = null;
+        await Carregar();
+    }
+
+    async Task Excluir(Produto p)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Produtos.Remove(p);
+        await db.SaveChangesAsync();
+        await Carregar();
+    }
+}
